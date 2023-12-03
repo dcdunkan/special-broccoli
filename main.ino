@@ -10,7 +10,7 @@ const int MINUTES_BUTTON = 5;
 const int HOURS_BUTTON = 6;
 const int BUZZER = 12;
 const unsigned long DEBOUNCE_DELAY = 200;
-
+const int BACKLIGHT_TIMEOUT = 10 * 1000;
 // There are 5 modes.
 // 0. Normal clock view
 // 1. Reset time
@@ -18,6 +18,11 @@ const unsigned long DEBOUNCE_DELAY = 200;
 // 3. Choose maths difficulty
 // 4. Configure snooze
 const int TOTAL_MODES = 5;
+const int MODE_CLOCK_VIEW = 0,
+          MODE_SET_TIME = 1,
+          MODE_SET_ALARM = 2,
+          MODE_SET_DIFFICULTY = 3,
+          MODE_SET_SNOOZE = 4;
 
 int switchModePrevState, toggleAlarmPrevState;
 
@@ -33,9 +38,7 @@ LiquidCrystal_I2C display(LCD_DISPLAY_ADDRESS, 16, 2);
 // Variables which affects the visual behavior.
 int mode = 0;
 bool alarmSet = false;
-
 unsigned long int lastBacklightTrigger = millis();
-const int BACKLIGHT_TIMEOUT = 10 * 1000;
 
 bool changedTime = false;
 
@@ -92,12 +95,6 @@ Time getNextProperAlarmTime() {
   }
   return suggestion;
 }
-
-const int MODE_CLOCK_VIEW = 0,
-          MODE_SET_TIME = 1,
-          MODE_SET_ALARM = 2,
-          MODE_SET_DIFFICULTY = 3,
-          MODE_SET_SNOOZE = 4;
 
 void loop() {
   DateTime time = rtc.now();
