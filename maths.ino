@@ -302,6 +302,8 @@ void processUpdates() {
             alarmTime.hour = (alarmTime.hour + 1) == 24 ? 0 : alarmTime.hour + 1;
             alarmTime.minute -= 60;
           }
+          display.setCursor(0, 1);
+          display.print("Snoozed        ");
         }
       }
       if (toggleBtnState == LOW) {
@@ -313,6 +315,9 @@ void processUpdates() {
         } else {
           generateEquation();
         }
+
+        display.setCursor(0, 1);
+        display.print("                ");
       }
     } else if (toggleBtnState != toggleAlarmPrevState) {
       // We're not showing the equation, which means we're in pure
@@ -332,7 +337,7 @@ void processUpdates() {
   }
 
   // Cycling between different modes. MODE button works everywhere.
-  if (showingQuestion) {
+  if (!showingQuestion) {
     if (modeBtnState != switchModePrevState) {
       if (modeBtnState == LOW) mode = (mode + 2 > TOTAL_MODES) ? 0 : mode + 1;
       switchModePrevState = modeBtnState;
