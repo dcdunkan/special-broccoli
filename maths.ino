@@ -22,7 +22,17 @@ const int MODE_CLOCK_VIEW = 0,
           MODE_SET_ALARM = 2,
           MODE_SET_DIFFICULTY = 3,
           MODE_SET_SNOOZE = 4;
+const int TOTAL_DIFFICULTIES = 3;
+char difficulties[TOTAL_DIFFICULTIES] = { '+', '-', '*' };
+const int DIFFICULTY_EASY = 0,
+          DIFFICULTY_MEDIUM = 1,
+          DIFFICULTY_HARD = 2;
+const int MINUTE = 1000;
+const int MIN_SNOOZE_LENGTH = 1;
+const int MAX_SNOOZE_LENGTH = 60;
+const int DEFAULT_SNOOZE_LENGTH = 10;
 
+// State management.
 int switchModePrevState, toggleAlarmPrevState, snoozePrevState;
 unsigned long toggleAlarmButtonLastDebounce,
   switchModeButtonLastDebounce,
@@ -30,35 +40,21 @@ unsigned long toggleAlarmButtonLastDebounce,
   minutesButtonLastDebounce,
   hoursButtonLastDebounce;
 
+// Initial variables.
+int mode = MODE_CLOCK_VIEW,
+    difficulty = DIFFICULTY_EASY,
+    snoozeLength = DEFAULT_SNOOZE_LENGTH;
+bool haveAlarmSet = false,
+     haveChangedTime = false,
+     isAlarmRinging = false,
+     showingQuestion = false;
+unsigned long lastBacklightTrigger = millis();
+int x, y, expectedAnswer, enteredAnswer;
+
+Time setTime, alarmTime;
+
 RTC_DS1307 rtc;
 LiquidCrystal_I2C display(LCD_DISPLAY_ADDRESS, 16, 2);
-const int TOTAL_DIFFICULTIES = 3;
-char difficulties[TOTAL_DIFFICULTIES] = { '+', '-', '*' };
-const int DIFFICULTY_EASY = 0,
-          DIFFICULTY_MEDIUM = 1,
-          DIFFICULTY_HARD = 2;
-
-const int MINUTE = 1000;
-const int MIN_SNOOZE_LENGTH = 1;
-const int MAX_SNOOZE_LENGTH = 60;
-const int DEFAULT_SNOOZE_LENGTH = 10;
-
-// Variables which affects the visual behavior.
-int mode = MODE_CLOCK_VIEW;
-int difficulty = DIFFICULTY_EASY;
-int snoozeLength = DEFAULT_SNOOZE_LENGTH;
-bool haveAlarmSet = false;
-bool haveChangedTime = false;
-bool isAlarmRinging = false;
-unsigned long lastBacklightTrigger = millis();
-int expectedAnswer;
-int enteredAnswer;
-char* question;
-bool showingQuestion = false;
-int x, y;
-
-Time setTime;
-Time alarmTime;
 
 void setup() {
   Serial.begin(9600);
@@ -114,14 +110,13 @@ void loop() {
   if (showingQuestion) {
     display.setCursor(0, 1);
     display.print(x);
+    display.print(" ");
     display.print(difficulties[difficulty]);
+    display.print(" ");
     display.print(y);
     display.print(" = ");
     display.print(enteredAnswer);
-    display.print("                ");
-  } else {
-    display.setCursor(0, 1);
-    display.print("                ");
+    display.print("       ");
   }
   displayTime(time);
   Serial.println(haveAlarmSet);
@@ -218,8 +213,9 @@ void loop() {
   }
 }
 
+// Debounce flickering button clicks and dedupe updates.
 int debounceButtonInput(int buttonPin, unsigned long* lastDebounceTime) {
-  int reading = digitalRead(buttonPin);  // Reading with debounce
+  int reading = digitalRead(buttonPin); // Reading with debounce
   unsigned long int uptime = millis();
   if (reading == LOW && (uptime - *lastDebounceTime) > DEBOUNCE_DELAY) {
     *lastDebounceTime = uptime;
@@ -227,32 +223,61 @@ int debounceButtonInput(int buttonPin, unsigned long* lastDebounceTime) {
   } else return HIGH;
 }
 
+// Generate random digits including +/- numbers and create
+// preset answer error range.
 void generateEquation() {
-  randomSeed(analogRead(1));
-  int limit = difficulty == DIFFICULTY_HARD ? 12 : 20;
-  x = int(random(1, limit));
-  y = int(random(1, limit));
+  randomSeed(analogRead(1)); // Refresh the random seed.
+
+  int limit = difficulty == DIFFICULTY_EASY
+    ? 20 // easy (-20, 20) +
+    : DIFFICULTY_MEDIUM
+    ? 30 // medium (-30, 30) -
+    : 12; // hard (-12, 12) *
+
+  do x = int(random(-limit, limit)); while (x == 0);
+  do y = int(random(-limit, limit)); while (y == 0);
+
   int deltaRange = 0;
+
   switch (difficulty) {
     case DIFFICULTY_EASY:
       expectedAnswer = x + y;
-      deltaRange = int(random(10, 15));
+      deltaRange = int(random(10, 20));
       break;
     case DIFFICULTY_MEDIUM:
       expectedAnswer = x - y;
-      deltaRange = int(random(10, 20));
+      deltaRange = int(random(15, 25));
       break;
     case DIFFICULTY_HARD:
       expectedAnswer = x * y;
-      deltaRange = int(random(10, 30));
+      deltaRange = int(random(20, 30));
       break;
   }
+
   int delta = 0;
   while (delta == 0) delta = int(random(-deltaRange, deltaRange));
   enteredAnswer = expectedAnswer - delta;
 }
 
 void processUpdates() {
+  if (haveAlarmSet && !showingQuestion) {
+    DateTime now = rtc.now();
+    if (now.hour() == alarmTime.hour && now.minute() == alarmTime.minute) {
+      // Ensure that we're in clock view and make sure to revert
+      // the time changing action.
+      if (haveChangedTime) {
+        haveChangedTime = false;
+        setTime.hour = now.hour();
+        setTime.minute = now.minute();
+      }
+      generateEquation();
+      digitalWrite(BUZZER, HIGH);
+      showingQuestion = true;
+      mode = 0;
+      return;
+    }
+  }
+
   // Debounce the hold event by the specified delay and return the state.
   int toggleBtnState = debounceButtonInput(TOGGLE_ALARM_BUTTON, &toggleAlarmButtonLastDebounce);
   int snoozeBtnState = debounceButtonInput(SNOOZE_BUTTON, &snoozeButtonLastDebounce);
@@ -260,59 +285,43 @@ void processUpdates() {
   int hourBtnState = debounceButtonInput(HOURS_BUTTON, &hoursButtonLastDebounce);
   int minuteBtnState = debounceButtonInput(MINUTES_BUTTON, &minutesButtonLastDebounce);
 
-  if (haveAlarmSet && !isAlarmRinging) {
-    DateTime now = rtc.now();
-    if (now.hour() == alarmTime.hour && now.minute() == alarmTime.minute) {
-      isAlarmRinging = true;
-      digitalWrite(BUZZER, HIGH);
-      showingQuestion = true;
-      generateEquation();
-      mode = 0;  // Ensure that we're in clock view.
-      return;
-    }
-  }
-
-  if (mode == MODE_CLOCK_VIEW && showingQuestion) {
-    if (hourBtnState == LOW) enteredAnswer--;
-    if (minuteBtnState == LOW) enteredAnswer++;
-    if (snoozeBtnState == LOW) {
-      if (expectedAnswer == enteredAnswer) {
-        isAlarmRinging = false;
-        showingQuestion = false;
-        digitalWrite(BUZZER, LOW);
-        alarmTime.minute = alarmTime.minute + snoozeLength;
-        while (alarmTime.minute >= 60) {
-          alarmTime.hour = (alarmTime.hour + 1) == 24 ? 0 : alarmTime.hour + 1;
-          alarmTime.minute -= 60;
+  if (mode == MODE_CLOCK_VIEW) {
+    if (showingQuestion) {
+      // If we're currently prompting user to solve a question,
+      // set actions of each buttons and don't listen to other buttons.
+      // Shouldn't set backlight timeout.
+      if (hourBtnState == LOW) enteredAnswer--;
+      if (minuteBtnState == LOW) enteredAnswer++;
+      if (snoozeBtnState == LOW) {
+        if (expectedAnswer == enteredAnswer) {
+          isAlarmRinging = false;
+          showingQuestion = false;
+          digitalWrite(BUZZER, LOW);
+          alarmTime.minute = alarmTime.minute + snoozeLength;
+          while (alarmTime.minute >= 60) {
+            alarmTime.hour = (alarmTime.hour + 1) == 24 ? 0 : alarmTime.hour + 1;
+            alarmTime.minute -= 60;
+          }
         }
       }
-    }
-    if (toggleBtnState == LOW) {
-      if (expectedAnswer == enteredAnswer) {
-        isAlarmRinging = false;
-        haveAlarmSet = false;
-        showingQuestion = false;
-        digitalWrite(BUZZER, LOW);
+      if (toggleBtnState == LOW) {
+        if (expectedAnswer == enteredAnswer) {
+          isAlarmRinging = false;
+          haveAlarmSet = false;
+          showingQuestion = false;
+          digitalWrite(BUZZER, LOW);
+        } else {
+          generateEquation();
+        }
       }
-    }
-  }
-
-  // Cycling between different modes. MODE button works everywhere.
-  if (!isAlarmRinging || showingQuestion) {
-    if (modeBtnState != switchModePrevState) {
-      if (modeBtnState == LOW) mode = (mode + 2 > TOTAL_MODES) ? 0 : mode + 1;
-      switchModePrevState = modeBtnState;
-    }
-  }
-
-  if (mode == MODE_CLOCK_VIEW) {
-    // Toggle alarm button toggles the alarm only in HOME
-    if (toggleBtnState != toggleAlarmPrevState) {
+    } else if (toggleBtnState != toggleAlarmPrevState) {
+      // We're not showing the equation, which means we're in pure
+      // clock mode. So, the default behavior of button.
       if (toggleBtnState == LOW) {
         if (!haveAlarmSet) {
           haveAlarmSet = true;
-        } else if (!showingQuestion) {
-          mode = 0;  // Ensure that we're in clock view.
+        } else {
+          mode = 0; // Ensure that we're in clock view.
           showingQuestion = true;
           generateEquation();
           return;
@@ -320,8 +329,13 @@ void processUpdates() {
       }
       toggleAlarmPrevState = toggleBtnState;
     }
-    // Snooze alarm only works in HOME.
-    if (snoozeBtnState != snoozePrevState) {
+  }
+
+  // Cycling between different modes. MODE button works everywhere.
+  if (showingQuestion) {
+    if (modeBtnState != switchModePrevState) {
+      if (modeBtnState == LOW) mode = (mode + 2 > TOTAL_MODES) ? 0 : mode + 1;
+      switchModePrevState = modeBtnState;
     }
   }
 
